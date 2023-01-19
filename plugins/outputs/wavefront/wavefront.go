@@ -8,11 +8,10 @@ import (
 	"regexp"
 	"strings"
 
-	wavefront "github.com/wavefronthq/wavefront-sdk-go/senders"
-
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/plugins/outputs"
 	serializer "github.com/influxdata/telegraf/plugins/serializers/wavefront"
+	wavefront "github.com/wavefronthq/wavefront-sdk-go/senders"
 )
 
 //go:embed sample.conf
@@ -22,6 +21,7 @@ const maxTagLength = 254
 
 type Wavefront struct {
 	URL                  string                          `toml:"url"`
+	DNSQuery             string                          `toml:"dns_query"`
 	Token                string                          `toml:"token"`
 	Host                 string                          `toml:"host" deprecated:"2.4.0;use url instead"`
 	Port                 int                             `toml:"port" deprecated:"2.4.0;use url instead"`
@@ -38,8 +38,9 @@ type Wavefront struct {
 	SourceOverride       []string                        `toml:"source_override"`
 	StringToNumber       map[string][]map[string]float64 `toml:"string_to_number" deprecated:"1.9.0;use the enum processor instead"`
 
-	sender wavefront.Sender
-	Log    telegraf.Logger `toml:"-"`
+	senders         []wavefront.Sender
+	nextSenderIndex int
+	Log             telegraf.Logger `toml:"-"`
 }
 
 // instead of Sanitize which may miss some special characters we can use a regex pattern, but this is significantly slower than Sanitize
@@ -67,12 +68,33 @@ func senderURLFromHostAndPort(host string, port int) string {
 	return fmt.Sprintf("http://%s:%d", host, port)
 }
 
+// TODO: make if conditions for DNS query/host/port not so duplicative
 func (w *Wavefront) Connect() error {
 	flushSeconds := 5
 	if w.ImmediateFlush {
 		flushSeconds = 86400 // Set a very long flush interval if we're flushing directly
 	}
 	var connectionURL string
+	if w.DNSQuery != "" {
+		servers, err := discoverServersViaDNS(w.DNSQuery)
+		if err != nil {
+			// TODO: actually handle
+			panic(err)
+		}
+		for _, server := range servers {
+			sender, err := wavefront.NewSender(server,
+				wavefront.BatchSize(w.HTTPMaximumBatchSize),
+				wavefront.FlushIntervalSeconds(flushSeconds),
+			)
+			if err != nil {
+				return fmt.Errorf("could not create Wavefront Sender for the provided url")
+			}
+
+			w.senders = append(w.senders, sender)
+		}
+
+	}
+
 	if w.URL != "" {
 		w.Log.Debug("connecting over http/https using Url: %s", w.URL)
 		connectionURLWithToken, err := senderURLFromURLAndToken(w.URL, w.Token)
@@ -80,12 +102,11 @@ func (w *Wavefront) Connect() error {
 			return err
 		}
 		connectionURL = connectionURLWithToken
-	} else {
+	} else if w.Host != "" {
 		w.Log.Warnf("configuration with host/port is deprecated. Please use url.")
 		w.Log.Debugf("connecting over http using Host: %q and Port: %d", w.Host, w.Port)
 		connectionURL = senderURLFromHostAndPort(w.Host, w.Port)
 	}
-
 	sender, err := wavefront.NewSender(connectionURL,
 		wavefront.BatchSize(w.HTTPMaximumBatchSize),
 		wavefront.FlushIntervalSeconds(flushSeconds),
@@ -95,7 +116,7 @@ func (w *Wavefront) Connect() error {
 		return fmt.Errorf("could not create Wavefront Sender for the provided url")
 	}
 
-	w.sender = sender
+	w.senders = append(w.senders, sender)
 
 	if w.ConvertPaths && w.MetricSeparator == "_" {
 		w.ConvertPaths = false
@@ -107,12 +128,13 @@ func (w *Wavefront) Connect() error {
 }
 
 func (w *Wavefront) Write(metrics []telegraf.Metric) error {
+	sender := w.nextSender()
 	for _, m := range metrics {
 		for _, point := range w.buildMetrics(m) {
-			err := w.sender.SendMetric(point.Metric, point.Value, point.Timestamp, point.Source, point.Tags)
+			err := sender.SendMetric(point.Metric, point.Value, point.Timestamp, point.Source, point.Tags)
 			if err != nil {
 				if isRetryable(err) {
-					if flushErr := w.sender.Flush(); flushErr != nil {
+					if flushErr := sender.Flush(); flushErr != nil {
 						w.Log.Errorf("wavefront flushing error: %v", flushErr)
 					}
 					return fmt.Errorf("wavefront sending error: %v", err)
@@ -131,9 +153,15 @@ func (w *Wavefront) Write(metrics []telegraf.Metric) error {
 	}
 	if w.ImmediateFlush {
 		w.Log.Debugf("Flushing batch of %d points", len(metrics))
-		return w.sender.Flush()
+		return sender.Flush()
 	}
 	return nil
+}
+
+func (w *Wavefront) nextSender() wavefront.Sender {
+	sender := w.senders[w.nextSenderIndex]
+	w.nextSenderIndex = (w.nextSenderIndex + 1) % len(w.senders)
+	return sender
 }
 
 func (w *Wavefront) buildMetrics(m telegraf.Metric) []*serializer.MetricPoint {
@@ -280,7 +308,9 @@ func buildValue(v interface{}, name string, w *Wavefront) (float64, error) {
 }
 
 func (w *Wavefront) Close() error {
-	w.sender.Close()
+	for _, sender := range w.senders {
+		sender.Close()
+	}
 	return nil
 }
 
