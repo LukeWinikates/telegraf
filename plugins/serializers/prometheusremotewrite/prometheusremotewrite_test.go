@@ -3,14 +3,15 @@ package prometheusremotewrite
 import (
 	"bytes"
 	"fmt"
+	"google.golang.org/protobuf/proto"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/golang/snappy"
 	"github.com/prometheus/common/model"
-	"github.com/prometheus/prometheus/prompb"
 	"github.com/stretchr/testify/require"
+	prompb "go.buf.build/protocolbuffers/go/prometheus/prometheus"
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/testutil"
@@ -713,7 +714,7 @@ func prompbToText(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	var req prompb.WriteRequest
-	err = req.Unmarshal(protobuff)
+	err = proto.Unmarshal(protobuff, &req)
 	if err != nil {
 		return nil, err
 	}

@@ -4,7 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/prometheus/prompb"
+	prompb "go.buf.build/protocolbuffers/go/prometheus/prometheus"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/stretchr/testify/require"
 
 	"github.com/influxdata/telegraf"
@@ -13,29 +15,29 @@ import (
 
 func TestParse(t *testing.T) {
 	prompbInput := prompb.WriteRequest{
-		Timeseries: []prompb.TimeSeries{
+		Timeseries: []*prompb.TimeSeries{
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{Name: "__name__", Value: "go_gc_duration_seconds"},
 					{Name: "quantile", Value: "0.99"},
 				},
-				Samples: []prompb.Sample{
+				Samples: []*prompb.Sample{
 					{Value: 4.63, Timestamp: time.Date(2020, 4, 1, 0, 0, 0, 0, time.UTC).UnixNano()},
 				},
 			},
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{Name: "__name__", Value: "prometheus_target_interval_length_seconds"},
 					{Name: "job", Value: "prometheus"},
 				},
-				Samples: []prompb.Sample{
+				Samples: []*prompb.Sample{
 					{Value: 14.99, Timestamp: time.Date(2020, 4, 1, 0, 0, 0, 0, time.UTC).UnixNano()},
 				},
 			},
 		},
 	}
 
-	inoutBytes, err := prompbInput.Marshal()
+	inoutBytes, err := proto.Marshal(&prompbInput)
 	require.NoError(t, err)
 
 	expected := []telegraf.Metric{
@@ -73,20 +75,20 @@ func TestParse(t *testing.T) {
 
 func TestDefaultTags(t *testing.T) {
 	prompbInput := prompb.WriteRequest{
-		Timeseries: []prompb.TimeSeries{
+		Timeseries: []*prompb.TimeSeries{
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{Name: "__name__", Value: "foo"},
 					{Name: "__eg__", Value: "bar"},
 				},
-				Samples: []prompb.Sample{
+				Samples: []*prompb.Sample{
 					{Value: 1, Timestamp: time.Date(2020, 4, 1, 0, 0, 0, 0, time.UTC).UnixNano()},
 				},
 			},
 		},
 	}
 
-	inoutBytes, err := prompbInput.Marshal()
+	inoutBytes, err := proto.Marshal(&prompbInput)
 	require.NoError(t, err)
 
 	expected := []telegraf.Metric{
@@ -119,20 +121,21 @@ func TestMetricsWithTimestamp(t *testing.T) {
 	testTime := time.Date(2020, time.October, 4, 17, 0, 0, 0, time.UTC)
 	testTimeUnix := testTime.UnixNano() / int64(time.Millisecond)
 	prompbInput := prompb.WriteRequest{
-		Timeseries: []prompb.TimeSeries{
+		Timeseries: []*prompb.TimeSeries{
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{Name: "__name__", Value: "foo"},
 					{Name: "__eg__", Value: "bar"},
 				},
-				Samples: []prompb.Sample{
+				Samples: []*prompb.Sample{
 					{Value: 1, Timestamp: testTimeUnix},
 				},
 			},
 		},
 	}
 
-	inoutBytes, err := prompbInput.Marshal()
+	inoutBytes, err := proto.Marshal(&prompbInput)
+
 	require.NoError(t, err)
 
 	expected := []telegraf.Metric{

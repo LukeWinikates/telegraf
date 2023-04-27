@@ -3,6 +3,7 @@ package prometheusremotewrite
 import (
 	"bytes"
 	"fmt"
+	"google.golang.org/protobuf/proto"
 	"hash/fnv"
 	"sort"
 	"strconv"
@@ -10,7 +11,7 @@ import (
 	"time"
 
 	"github.com/golang/snappy"
-	"github.com/prometheus/prometheus/prompb"
+	prompb "go.buf.build/protocolbuffers/go/prometheus/prometheus"
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/plugins/serializers/prometheus"
@@ -90,7 +91,7 @@ func (s *Serializer) SerializeBatch(metrics []telegraf.Metric) ([]byte, error) {
 					if _, ok = entries[metrickeycount]; !ok {
 						entries[metrickeycount] = promtscount
 					}
-					extraLabel := prompb.Label{
+					extraLabel := &prompb.Label{
 						Name:  "le",
 						Value: "+Inf",
 					}
@@ -112,7 +113,7 @@ func (s *Serializer) SerializeBatch(metrics []telegraf.Metric) ([]byte, error) {
 						continue
 					}
 
-					extraLabel = prompb.Label{
+					extraLabel = &prompb.Label{
 						Name:  "le",
 						Value: fmt.Sprint(bound),
 					}
@@ -131,7 +132,7 @@ func (s *Serializer) SerializeBatch(metrics []telegraf.Metric) ([]byte, error) {
 					}
 
 					// if no bucket generate +Inf entry
-					extraLabel := prompb.Label{
+					extraLabel := &prompb.Label{
 						Name:  "le",
 						Value: "+Inf",
 					}
@@ -178,7 +179,7 @@ func (s *Serializer) SerializeBatch(metrics []telegraf.Metric) ([]byte, error) {
 						Name:  "quantile",
 						Value: fmt.Sprint(quantile),
 					}
-					metrickey, promts = getPromTS(metricName, labels, value, metric.Time(), extraLabel)
+					metrickey, promts = getPromTS(metricName, labels, value, metric.Time(), &extraLabel)
 				}
 			default:
 				return nil, fmt.Errorf("unknown type %v", metric.Type())
@@ -197,10 +198,10 @@ func (s *Serializer) SerializeBatch(metrics []telegraf.Metric) ([]byte, error) {
 		}
 	}
 
-	var promTS = make([]prompb.TimeSeries, len(entries))
+	var promTS = make([]*prompb.TimeSeries, len(entries))
 	var i int
 	for _, promts := range entries {
-		promTS[i] = promts
+		promTS[i] = &promts
 		i++
 	}
 
@@ -229,7 +230,7 @@ func (s *Serializer) SerializeBatch(metrics []telegraf.Metric) ([]byte, error) {
 		})
 	}
 	pb := &prompb.WriteRequest{Timeseries: promTS}
-	data, err := pb.Marshal()
+	data, err := proto.Marshal(pb)
 	if err != nil {
 		return nil, fmt.Errorf("unable to marshal protobuf: %w", err)
 	}
@@ -301,7 +302,7 @@ func (s *Serializer) appendCommonLabels(labels []prompb.Label, metric telegraf.M
 	return labels
 }
 
-func MakeMetricKey(labels []prompb.Label) MetricKey {
+func MakeMetricKey(labels []*prompb.Label) MetricKey {
 	h := fnv.New64a()
 	for _, label := range labels {
 		h.Write([]byte(label.Name))
@@ -312,17 +313,20 @@ func MakeMetricKey(labels []prompb.Label) MetricKey {
 	return MetricKey(h.Sum64())
 }
 
-func getPromTS(name string, labels []prompb.Label, value float64, ts time.Time, extraLabels ...prompb.Label) (MetricKey, prompb.TimeSeries) {
-	labelscopy := make([]prompb.Label, len(labels), len(labels)+1)
-	copy(labelscopy, labels)
+func getPromTS(name string, labels []prompb.Label, value float64, ts time.Time, extraLabels ...*prompb.Label) (MetricKey, prompb.TimeSeries) {
+	labelscopy := make([]*prompb.Label, len(labels), len(labels)+1)
 
-	sample := []prompb.Sample{{
+	for i, label := range labels {
+		labelscopy[i] = &label
+	}
+
+	sample := []*prompb.Sample{{
 		// Timestamp is int milliseconds for remote write.
 		Timestamp: ts.UnixNano() / int64(time.Millisecond),
 		Value:     value,
 	}}
 	labelscopy = append(labelscopy, extraLabels...)
-	labelscopy = append(labelscopy, prompb.Label{
+	labelscopy = append(labelscopy, &prompb.Label{
 		Name:  "__name__",
 		Value: name,
 	})
@@ -333,7 +337,7 @@ func getPromTS(name string, labels []prompb.Label, value float64, ts time.Time, 
 	return MakeMetricKey(labelscopy), prompb.TimeSeries{Labels: labelscopy, Samples: sample}
 }
 
-type sortableLabels []prompb.Label
+type sortableLabels []*prompb.Label
 
 func (sl sortableLabels) Len() int { return len(sl) }
 func (sl sortableLabels) Less(i, j int) bool {

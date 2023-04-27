@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/prometheus/common/model"
-	"github.com/prometheus/prometheus/prompb"
-
+	prompb "go.buf.build/protocolbuffers/go/prometheus/prometheus"
+	"google.golang.org/protobuf/proto"
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/metric"
 	"github.com/influxdata/telegraf/plugins/parsers"
@@ -22,7 +22,7 @@ func (p *Parser) Parse(buf []byte) ([]telegraf.Metric, error) {
 	var metrics []telegraf.Metric
 	var req prompb.WriteRequest
 
-	if err := req.Unmarshal(buf); err != nil {
+	if err := proto.Unmarshal(buf, &req); err != nil {
 		return nil, fmt.Errorf("unable to unmarshal request body: %w", err)
 	}
 
