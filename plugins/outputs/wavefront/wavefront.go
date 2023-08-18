@@ -34,6 +34,7 @@ type Wavefront struct {
 	ConvertPaths         bool                            `toml:"convert_paths"`
 	ConvertBool          bool                            `toml:"convert_bool"`
 	HTTPMaximumBatchSize int                             `toml:"http_maximum_batch_size"`
+	SendSDKMetrics       bool                            `toml:"send_sdk_metrics"`
 	Timeout              config.Duration                 `toml:"timeout"`
 	UseRegex             bool                            `toml:"use_regex"`
 	UseStrict            bool                            `toml:"use_strict"`
@@ -107,6 +108,7 @@ func (w *Wavefront) Connect() error {
 
 	sender, err := wavefront.NewSender(connectionURL,
 		wavefront.BatchSize(w.HTTPMaximumBatchSize),
+		wavefront.SendInternalMetrics(w.SendSDKMetrics),
 		wavefront.FlushIntervalSeconds(flushSeconds),
 		wavefront.TLSConfigOptions(tlsConfig),
 		wavefront.Timeout(time.Duration(w.Timeout)),
@@ -316,6 +318,7 @@ func init() {
 			TruncateTags:         false,
 			ImmediateFlush:       true,
 			HTTPMaximumBatchSize: 10000,
+			SendSDKMetrics:       true,
 			Timeout:              config.Duration(10 * time.Second),
 		}
 	})
