@@ -138,36 +138,43 @@ func (w *Wavefront) Connect() error {
 	return nil
 }
 
+func (w *Wavefront) TryFlushAll() error {
+	err := w.sender.FlushAll()
+	if w.ImmediateFlush {
+		return err
+	}
+	return nil
+}
+
+// The Wavefront output can send writes synchronously, or in the background
+// If using Background writes, the SDK will use a background ticker to periodically flush batches to the configured url
+// If using synchronous writes, we will send in batches
 func (w *Wavefront) Write(metrics []telegraf.Metric) error {
+	if len(metrics) > w.HTTPMaximumBatchSize {
+		w.Log.Warnf("Telegraf metric batch size is larger than wavefront SDK batch size, so metrics will be sent in multiple batches")
+		w.Log.Warnf("Consider making the batch sizes the same")
+	}
 	for _, m := range metrics {
 		for _, point := range w.buildMetrics(m) {
 			err := w.sender.SendMetric(point.Metric, point.Value, point.Timestamp, point.Source, point.Tags)
 			if err != nil {
-				if isRetryable(err) {
-					// The internal buffer in the Wavefront SDK is full. To prevent data loss,
-					// we flush the buffer (which is a blocking operation) and try again.
-					w.Log.Debug("SDK buffer overrun, forcibly flushing the buffer")
-					if err = w.sender.Flush(); err != nil {
-						return fmt.Errorf("wavefront flushing error: %w", err)
-					}
-					// Try again.
-					err = w.sender.SendMetric(point.Metric, point.Value, point.Timestamp, point.Source, point.Tags)
-					if err != nil {
-						if isRetryable(err) {
-							return fmt.Errorf("wavefront sending error: %w", err)
-						}
-					}
+				if wavefront.IsMetricInvalid(err) {
+					w.Log.Errorf("Non-retryable error during Wavefront.Write: %v", err)
+					w.Log.Debugf("Non-retryable metric data: %+v", point)
 				}
-				w.Log.Errorf("Non-retryable error during Wavefront.Write: %v", err)
-				w.Log.Debugf("Non-retryable metric data: %+v", point)
+				if wavefront.IsBufferingError(err) {
+					w.Log.Errorf("SDK Buffer is Full. Metrics Will Be Dropped: %v", err)
+					if w.ImmediateFlush {
+						return err
+					}
+					w.Log.Errorf("To avoid buffering, use `immediate_flush = true` to disable the SDK's buffer entirely and rely on Telegraf's buffer")
+					w.Log.Errorf("You may be able to resolve this by increasing the SDK buffer size, or flush frequency")
+				}
 			}
 		}
 	}
-	if w.ImmediateFlush {
-		w.Log.Debugf("Flushing batch of %d points", len(metrics))
-		return w.sender.Flush()
-	}
-	return nil
+
+	return w.TryFlushAll()
 }
 
 func (w *Wavefront) buildMetrics(m telegraf.Metric) []*serializer.MetricPoint {
@@ -388,22 +395,4 @@ func init() {
 			CSPBaseURL:           "https://console.cloud.vmware.com",
 		}
 	})
-}
-
-// TODO: Currently there's no canonical way to exhaust all
-// retryable/non-retryable errors from wavefront, so this implementation just
-// handles known non-retryable errors in a case-by-case basis and assumes all
-// other errors are retryable.
-// A support ticket has been filed against wavefront to provide a canonical way
-// to distinguish between retryable and non-retryable errors (link is not
-// public).
-func isRetryable(err error) bool {
-	if err != nil {
-		// "empty metric name" errors are non-retryable as retry will just keep
-		// getting the same error again and again.
-		if strings.Contains(err.Error(), "empty metric name") {
-			return false
-		}
-	}
-	return true
 }
