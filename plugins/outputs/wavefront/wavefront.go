@@ -154,7 +154,12 @@ func (w *Wavefront) Write(metrics []telegraf.Metric) error {
 		w.Log.Warnf("Telegraf metric batch size is larger than wavefront SDK batch size, so metrics will be sent in multiple batches")
 		w.Log.Warnf("Consider making the batch sizes the same")
 	}
+
+	var points []*serializer.MetricPoint
+
 	for _, m := range metrics {
+		points = append(points, w.buildMetrics(m)...)
+
 		for _, point := range w.buildMetrics(m) {
 			err := w.sender.SendMetric(point.Metric, point.Value, point.Timestamp, point.Source, point.Tags)
 			if err != nil {
@@ -173,6 +178,8 @@ func (w *Wavefront) Write(metrics []telegraf.Metric) error {
 			}
 		}
 	}
+	// gah! but this type doesn't exist in the sdk.
+	w.SendMetricsBatch(points)
 
 	return w.TryFlushAll()
 }
